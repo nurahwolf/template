@@ -54,31 +54,31 @@ pub async fn save(info: &[Info]) -> anyhow::Result<()> {
 }
 
 /// Restores shard resumption information from the file system.
-pub async fn restore(config: Config, shards: u32) -> Vec<Shard> {
+pub async fn restore(config: Config, recommended_shards: u32) -> Vec<Shard> {
     let info = async {
         let contents = fs::read(INFO_FILE).await?;
         Ok::<_, anyhow::Error>(serde_json::from_slice::<Vec<Info>>(&contents)?)
     }
     .await;
 
-    let shard_ids = (0..shards).map(|shard| ShardId::new(shard, shards));
-
-    // A session may only be successfully resumed if it retains its shard ID, but
-    // Discord may have recommend a different shard count (producing different shard
-    // IDs).
-    let shards: Vec<_> = if let Ok(info) = info
-        && info.len() == shards as usize
+    // The recommended shard count targets 1000 guilds per shard (out of a maximum
+    // of 2500), so it might be different from the previous shard count.
+    let shards = if let Ok(info) = info
+        && recommended_shards / 2 <= info.len() as u32
     {
         tracing::info!("resuming previous gateway sessions");
-        shard_ids
+        let previous_shards = info.len() as u32;
+        (0..previous_shards)
             .zip(info)
-            .map(|(shard_id, info)| {
+            .map(|(shard, info)| {
                 let builder = ConfigBuilder::from(config.clone()).resume_info(info);
+                let shard_id = ShardId::new(shard, previous_shards);
                 Shard::with_config(shard_id, builder.build())
             })
             .collect()
     } else {
-        shard_ids
+        (0..recommended_shards)
+            .map(|shard| ShardId::new(shard, recommended_shards))
             .map(|shard_id| Shard::with_config(shard_id, config.clone()))
             .collect()
     };
